@@ -36,8 +36,8 @@ class RNNModel(nn.Module):
         nn.init.zeros_(self.decoder.weight)
         nn.init.uniform_(self.decoder.weight, -initrange, initrange)
 
-    def forward(self, x, hidden):
-        emb = self.drop(self.encoder(x))
+    def forward(self, src, hidden):
+        emb = self.drop(self.encoder(src))
         output, hidden = self.lstm(emb, hidden)
         output = self.drop(output)
         decoded = self.decoder(output)
