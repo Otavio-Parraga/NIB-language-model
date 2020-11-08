@@ -54,10 +54,11 @@ class TransformerModel(nn.Module):
         try:
             from torch.nn import TransformerEncoder, TransformerEncoderLayer, TransformerDecoder, TransformerDecoderLayer
         except:
-            raise ImportError('TransformerEncoder module does not exist in PyTorch 1.1 or lower.')
+            raise ImportError('Use a newer version of PyTorch')
         self.model_type = 'transformer'
         self.src_mask = None
         self.ninp = ninp
+        self.ntoken = ntoken
         self.pos_encoder = PositionalEncoding(ninp, dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
 
@@ -65,9 +66,9 @@ class TransformerModel(nn.Module):
         encoder_layers = TransformerEncoderLayer(ninp, nhead, nhid, dropout)
         self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers, encoder_norm)
 
-        decoder_norm = nn.LayerNorm(ninp)
-        decoder_layers = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
-        self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers, decoder_norm)
+        #decoder_norm = nn.LayerNorm(ninp)
+        #decoder_layers = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
+        #self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers, decoder_norm)
 
         self.decoder = nn.Linear(ninp, ntoken)
 
@@ -96,5 +97,6 @@ class TransformerModel(nn.Module):
         src = self.encoder(src) * math.sqrt(self.ninp)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, self.src_mask)
+        #output = self.transformer_decoder(src, output, self.src_mask)
         output = self.decoder(output)
         return output.view(-1, self.ntoken)

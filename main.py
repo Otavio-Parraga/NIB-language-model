@@ -5,7 +5,7 @@ import math
 import os
 import torch
 import torch.nn as nn
-
+import logging
 import data
 from models.Transformer import TransformerModel
 from models.LSTM import LSTMModel
@@ -29,9 +29,9 @@ parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=40,
+parser.add_argument('--epochs', type=int, default=60,
                     help='upper epoch limit')
-parser.add_argument('--batch_size', type=int, default=20, metavar='N',
+parser.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='batch size')
 parser.add_argument('--bptt', type=int, default=35,
                     help='sequence length')
@@ -45,22 +45,42 @@ parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
-parser.add_argument('--save', type=str, default='model.pt',
-                    help='path to save the final model')
 parser.add_argument('--patience', type=int, default=5,
                     help='number of bad epochs before stop the model')
 parser.add_argument('--nhead', type=int, default=2,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
+parser.add_argument('--bias_reg', action='store_true',
+                    help='when to use bias regulator on encoder')
+parser.add_argument('--bias_reg_lambda', type=float, default=1.0,
+                    help='bias regularization encoder loss weight factor')
+parser.add_argument('--bias_reg_var_ratio', type=float, default=0.5,
+                    help=('ratio of variance used for determining size of gender'
+                          'subspace for bias regularization'))
 
 args = parser.parse_args()
+##############################################################################
+# set initial configurations
+##############################################################################
+if args.e != None:
+    SAVE_PATH = f'./checkpoints/{args.e}'
+elif args.bias_reg:
+    SAVE_PATH = f'./checkpoints/{args.model}/{args.dataset}/bias_reg_{args.bias_reg_lambda}'
+else:
+    SAVE_PATH = f'./checkpoints/{args.model}/{args.dataset}'
+
+if not os.path.exists(SAVE_PATH):
+    os.mkdir(SAVE_PATH)
+
+logging.basicConfig(filename=f'{SAVE_PATH}/log_file.log', filemode='w', level=logging.INFO)
+logging.getLogger().addHandler(logging.StreamHandler())
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
 if torch.cuda.is_available():
     if not args.cuda:
-        print("WARNING: You have a CUDA device, so you should probably run with --cuda")
+        logging.info("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
 device = torch.device("cuda" if args.cuda else "cpu")
 
@@ -108,6 +128,65 @@ else:
     model = LSTMModel(ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
 
 criterion = nn.CrossEntropyLoss()
+
+##############################################################################
+# set bias reg needs
+##############################################################################
+filename  = f'./gender_pairs/{args.dataset}-gender-pairs'
+
+female_words, male_words =[],[]
+with open(filename,'r', encoding='utf8') as f:
+    gender_pairs = f.readlines()
+
+for gp in gender_pairs:
+    m,f=gp.split()
+    female_words.append(f)
+    male_words.append(m)
+
+gender_words = set(female_words) | set(male_words)
+
+word2idx = corpus.dictionary.word2idx
+#Gender pair indexes
+D = torch.LongTensor([[word2idx[wf], word2idx[wm]]
+                       for wf, wm in zip(female_words, male_words)
+                       if wf in word2idx and wm in word2idx])
+
+#Not gendered word indexes
+N = torch.LongTensor([idx for w, idx in word2idx.items() if w not in gender_words])
+
+def bias_regularization_encoder(model, D, N, var_ratio, lmbda, norm=True):
+    """
+    Compute bias regularization loss term
+    Original code:  https://github.com/BordiaS/language-model-bias
+    Original paper: https://arxiv.org/abs/1904.03035
+    """
+    W = model.encoder.weight
+    if norm:
+        W = W / model.encoder.weight.norm(2, dim=1).view(-1, 1)
+    C = []
+    # Stack all of the differences between the gender pairs
+    for idx in range(D.size()[0]):
+        idxs = D[idx].view(-1)
+        u = W[idxs[0],:]
+        v = W[idxs[1],:]
+        C.append(((u - v)/2).view(1, -1))
+    C = torch.cat(C, dim=0)
+    # Get prinipal components
+    U, S, V = torch.svd(C)
+
+    # Find k such that we capture 100*var_ratio% of the gender variance
+    var = S**2
+
+    norm_var = var/var.sum()
+    cumul_norm_var = torch.cumsum(norm_var, dim=0)
+    _, k_idx = cumul_norm_var[cumul_norm_var >= var_ratio].min(dim=0)
+    # Get first k components to for gender subspace
+    
+    B = V[:, :k_idx.data.item()+1]
+    loss = torch.matmul(W[N], B).norm(2) ** 2
+
+    return lmbda * loss
+
 
 ###############################################################################
 # Training code
@@ -167,7 +246,6 @@ def train():
     total_loss = 0.
     start_time = time.time()
     ntokens = len(corpus.dictionary)
-    bad_epochs = 0
     if args.model != 'transformer':
         hidden = model.init_hidden(args.batch_size)
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
@@ -183,9 +261,15 @@ def train():
         else:
             hidden = repackage_hidden(hidden)
             output, hidden = model(data, hidden)
-        loss = criterion(output, targets)
+            
+        if args.bias_reg:
+            bias_loss = bias_regularization_encoder(model, D, N, args.bias_reg_var_ratio, args.bias_reg_lambda, False)
+            raw_loss = criterion(output, targets.view(-1))
+            loss = raw_loss + bias_loss
+        else:    
+            loss = criterion(output, targets.view(-1))
         loss.backward()
-
+        
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         for p in model.parameters():
@@ -196,7 +280,7 @@ def train():
         if batch % args.log_interval == 0 and batch > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
-            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
+            logging.info('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f}'.format(
                 epoch, batch, len(train_data) // args.bptt, lr,
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
@@ -209,6 +293,7 @@ def train():
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
+bad_epochs = 0
 
 # At any point you can hit Ctrl + C to break out of training early.
 try:
@@ -216,14 +301,14 @@ try:
         epoch_start_time = time.time()
         train()
         val_loss = evaluate(val_data)
-        print('-' * 89)
-        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
+        logging.info('-' * 89)
+        logging.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | bad epochs:'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss), bad_epochs))
-        print('-' * 89)
+        logging.info('-' * 89)
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
-            with open(args.save, 'wb') as f:
+            with open(f'{SAVE_PATH}/best-model.pt', 'wb') as f:
                 torch.save(model, f)
             best_val_loss = val_loss
         else:
@@ -235,21 +320,20 @@ try:
             bad_epochs += 1
 
 except KeyboardInterrupt:
-    print('-' * 89)
-    print('Exiting from training early')
+    logging.info('-' * 89)
+    logging.info('Exiting from training early')
 
 # Load the best saved model.
-with open(args.save, 'rb') as f:
-    model = torch.load(f)
-    # after load the rnn params are not a continuous chunk of memory
-    # this makes them a continuous chunk, and will speed up forward pass
-    # Currently, only rnn model supports flatten_parameters function.
-    if args.model in ['lstm', 'att_lstm']:
-        model.lstm.flatten_parameters()
+model = torch.load(f'{SAVE_PATH}/best-model.pt')
+# after load the rnn params are not a continuous chunk of memory
+# this makes them a continuous chunk, and will speed up forward pass
+# Currently, only rnn model supports flatten_parameters function.
+if args.model in ['lstm', 'att_lstm']:
+    model.lstm.flatten_parameters()
 
 # Run on test data.
 test_loss = evaluate(test_data)
-print('=' * 89)
-print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
+logging.info('=' * 89)
+logging.info('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
     test_loss, math.exp(test_loss)))
-print('=' * 89)
+logging.info('=' * 89)
