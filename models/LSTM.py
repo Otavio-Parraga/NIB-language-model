@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class RNNModel(nn.Module):
+class LSTMModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
     def __init__(self, ntoken, ninp, nhid, nlayers, dropout=0.5, tie_weights=False):
