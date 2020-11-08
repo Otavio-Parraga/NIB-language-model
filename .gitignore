@@ -1,1 +1,6 @@
 data/br_lit/books
+__pycache__
+models/__pycache__
+*.pt
+*.log
+*.txt
