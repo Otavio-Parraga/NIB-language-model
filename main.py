@@ -7,12 +7,14 @@ import torch
 import torch.nn as nn
 
 import data
-from models.transformer import TransformerModel
+from models.Transformer import TransformerModel
 from models.LSTM import LSTMModel
 from models.AttentionLSTM import AttentionLSTMLanguageModel
 
 
 parser = argparse.ArgumentParser(description='PyTorch LSTM/ATT_LSTM/transformer Language Model')
+parser.add_argument('--e', type=str, default=None,
+                    help='name of the experiment')
 parser.add_argument('--dataset', type=str, default='wikitext2',
                     help='location of the data corpus')
 parser.add_argument('--model', type=str, default='LSTM',
@@ -45,7 +47,8 @@ parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
 parser.add_argument('--save', type=str, default='model.pt',
                     help='path to save the final model')
-
+parser.add_argument('--patience', type=int, default=5,
+                    help='number of bad epochs before stop the model')
 parser.add_argument('--nhead', type=int, default=2,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry-run', action='store_true',
@@ -65,7 +68,7 @@ device = torch.device("cuda" if args.cuda else "cpu")
 # Load data
 ###############################################################################
 
-corpus = data.Corpus(f'./data{args.dataset}')
+corpus = data.Corpus(f'./data/{args.dataset}')
 
 # Starting from sequential data, batchify arranges the dataset into columns.
 # For instance, with the alphabet as the sequence and batch size 4, we'd get
@@ -98,11 +101,11 @@ test_data = batchify(corpus.test, args.batch_size)
 
 ntokens = len(corpus.dictionary)
 if args.model == 'transformer':
-    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
+    model = TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
 elif args.model == 'att_lstm':
-    model = model.AttentionLSTMLanguageModel(ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
+    model = AttentionLSTMLanguageModel(ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
 else: 
-    model = model.LSTMModel(ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
+    model = LSTMModel(ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.tied).to(device)
 
 criterion = nn.CrossEntropyLoss()
 
@@ -164,6 +167,7 @@ def train():
     total_loss = 0.
     start_time = time.time()
     ntokens = len(corpus.dictionary)
+    bad_epochs = 0
     if args.model != 'transformer':
         hidden = model.init_hidden(args.batch_size)
     for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
@@ -200,7 +204,8 @@ def train():
             start_time = time.time()
         if args.dry_run:
             break
-
+        if bad_epochs == args.patience:
+            break
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
@@ -213,8 +218,8 @@ try:
         val_loss = evaluate(val_data)
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
-                                           val_loss, math.exp(val_loss)))
+                'valid ppl {:8.2f} | bad epochs:'.format(epoch, (time.time() - epoch_start_time),
+                                           val_loss, math.exp(val_loss), bad_epochs))
         print('-' * 89)
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
@@ -224,6 +229,11 @@ try:
         else:
             # Anneal the learning rate if no improvement has been seen in the validation dataset.
             lr /= 4.0
+
+        #early stop
+        if round(val_loss,3) > round(best_val_loss,3):
+            bad_epochs += 1
+
 except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')
