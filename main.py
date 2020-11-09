@@ -29,7 +29,7 @@ parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=60,
+parser.add_argument('--epochs', type=int, default=40,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=32, metavar='N',
                     help='batch size')
@@ -303,7 +303,7 @@ try:
         val_loss = evaluate(val_data)
         logging.info('-' * 89)
         logging.info('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                'valid ppl {:8.2f} | bad epochs:'.format(epoch, (time.time() - epoch_start_time),
+                'valid ppl {:8.2f} | bad epochs: {}'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss, math.exp(val_loss), bad_epochs))
         logging.info('-' * 89)
         # Save the model if the validation loss is the best we've seen so far.
