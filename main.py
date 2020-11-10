@@ -71,7 +71,7 @@ else:
     SAVE_PATH = f'./checkpoints/{args.model}/{args.dataset}'
 
 if not os.path.exists(SAVE_PATH):
-    os.mkdir(SAVE_PATH)
+    os.makedirs(SAVE_PATH)
 
 logging.basicConfig(filename=f'{SAVE_PATH}/log_file.log', filemode='w', level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler())
