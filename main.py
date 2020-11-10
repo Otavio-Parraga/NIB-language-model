@@ -288,8 +288,6 @@ def train():
             start_time = time.time()
         if args.dry_run:
             break
-        if bad_epochs == args.patience:
-            break
 # Loop over epochs.
 lr = args.lr
 best_val_loss = None
@@ -320,6 +318,9 @@ try:
             bad_epochs += 1
         else:
             bad_epochs == 0
+
+        if bad_epochs == args.patience + 1:
+            break
 
 except KeyboardInterrupt:
     logging.info('-' * 89)
