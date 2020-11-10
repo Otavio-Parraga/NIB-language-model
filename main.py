@@ -318,6 +318,8 @@ try:
         #early stop
         if round(val_loss,3) > round(best_val_loss,3):
             bad_epochs += 1
+        else:
+            bad_epochs == 0
 
 except KeyboardInterrupt:
     logging.info('-' * 89)
