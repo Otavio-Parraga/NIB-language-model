@@ -314,10 +314,10 @@ try:
             lr /= 4.0
 
         #early stop
-        if round(val_loss,3) > round(best_val_loss,3):
+        if round(val_loss,2) > round(best_val_loss,2):
             bad_epochs += 1
         else:
-            bad_epochs == 0
+            bad_epochs = 0
 
         if bad_epochs == args.patience + 1:
             break
